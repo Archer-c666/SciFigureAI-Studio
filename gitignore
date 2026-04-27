@@ -1,0 +1,185 @@
+# =========================================================
+# SciFigure AI Studio - Git Ignore
+# 目的：避免提交临时文件、缓存、虚拟环境、打包产物、API Key 和本地配置
+# =========================================================
+
+# -------------------------
+# Python cache / bytecode
+# -------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# -------------------------
+# Virtual environments
+# -------------------------
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# -------------------------
+# Local environment / secrets
+# 不要提交 API Key、Token、本地模型配置
+# -------------------------
+.env
+.env.*
+!.env.example
+*.env
+secrets.*
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# 本地配置文件：保留示例配置，忽略个人配置
+config.local.py
+config.private.py
+settings.local.py
+settings.private.py
+local_config.py
+local_settings.py
+*.local.json
+*.local.yaml
+*.local.yml
+*.private.json
+*.private.yaml
+*.private.yml
+
+# 如果你把大模型配置保存成这些文件，也不要提交
+llm_config.json
+llm_config.yaml
+llm_config.yml
+api_config.json
+api_config.yaml
+api_config.yml
+user_config.json
+user_settings.json
+
+# -------------------------
+# Logs
+# -------------------------
+*.log
+logs/
+pandasai.log
+
+# -------------------------
+# Build / packaging outputs
+# PyInstaller / setuptools / wheel
+# -------------------------
+build/
+dist/
+*.spec.bak
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# PyInstaller runtime cache
+*.manifest
+*.toc
+*.pkg
+*.pyz
+*.pyz_extracted/
+
+# -------------------------
+# Test / coverage / lint cache
+# -------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+.cache/
+
+# -------------------------
+# Jupyter / notebooks
+# -------------------------
+.ipynb_checkpoints/
+
+# -------------------------
+# Application runtime cache / temp files
+# -------------------------
+.cache/
+cache/
+tmp/
+temp/
+.tmp/
+runtime/
+sessions/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# -------------------------
+# User datasets / research data
+# 避免误提交原始实验数据、Excel、CSV
+# 如需提交示例数据，请放到 examples/data/ 并取消忽略
+# -------------------------
+data/
+datasets/
+raw_data/
+user_data/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.xlsm
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.jsonl
+!examples/**/*.csv
+!examples/**/*.xlsx
+!examples/**/*.json
+
+# -------------------------
+# OS files
+# -------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# -------------------------
+# IDE / editor
+# -------------------------
+.vscode/
+.idea/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+
+# -------------------------
+# Qt / Matplotlib runtime files
+# -------------------------
+.matplotlib/
+fontList.json
+qt.conf
+
+# -------------------------
+# Crash dumps
+# -------------------------
+*.dmp
+*.dump
+*.stackdump
+
+# -------------------------
+# Optional: local license/build notes
+# -------------------------
+release/
+release_notes.local.md
