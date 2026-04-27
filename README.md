@@ -1,6 +1,6 @@
-# SciFigure AI Studio 2.1
+# SciFigure AI Studio 
 
-> AI 科研绘图桌面软件：从表格数据到论文级图表，一站完成 **数据导入 → 生成绘图 → 参数精修 → 复现代码 → 多格式导出**。
+> AI 科研绘图工具：从表格数据到论文级图表，一站完成 **数据导入 → 生成绘图 → 参数精修 → 复现代码 → 多格式导出**。
 
 SciFigure AI Studio 是一个面向科研、论文写作、实验报告和数据分析场景的桌面绘图工具。用户可以导入 CSV、Excel、JSON、Parquet，也可以直接在软件中手动输入 X/Y 数据或粘贴 Excel 表格；随后通过自然语言描述绘图需求，由大模型生成安全的绘图方案 `ChartSpec`，再交给本地可信绘图引擎渲染图表。
 
@@ -289,62 +289,6 @@ SciFigureAIStudio/
     styles.py                   # QSS 外观样式
     widgets.py                  # 自定义控件
 ```
-
----
-
-## 常见问题
-
-### 1. 双击 `启动软件.bat` 后闪退怎么办？
-
-在项目目录空白处按住 `Shift + 鼠标右键`，选择“在终端中打开”，运行：
-
-```bash
-python main.py
-```
-
-查看具体报错。
-
-### 2. 提示没有 Python？
-
-安装 Python 3.9+，并在安装界面勾选：
-
-```text
-Add Python to PATH
-```
-
-### 3. DeepSeek 返回 400 Bad Request？
-
-通常是 Base URL 或模型名不匹配。建议：
-
-```env
-AI_FIGURE_BASE_URL=https://api.deepseek.com
-AI_FIGURE_MODEL=deepseek-chat
-```
-
-不要把 Base URL 写成模型名，也不要使用 DeepSeek 不支持的 OpenAI 模型名。
-
-### 4. 为什么打包后体积很大？
-
-PyQt5、Matplotlib、Pandas、NumPy 本身体积较大，打包后几十到几百 MB 属于正常情况。
-
-### 5. 可以完全离线使用吗？
-
-可以。不填 API Key 时，软件使用本地规则模式。但自然语言理解能力会弱于大模型模式。
-
----
-
-## 技术栈
-
-- Python 3.9+
-- PyQt5
-- Pandas / NumPy
-- Matplotlib / Seaborn
-- Requests
-- python-dotenv
-- PyInstaller
-
----
-
 ## 开源协议
 
 本项目可继续沿用 MIT License。请在发布时保留 LICENSE 文件。
