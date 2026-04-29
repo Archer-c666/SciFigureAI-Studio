@@ -138,4 +138,25 @@ QScrollBar::handle:vertical {
 QScrollBar::handle:vertical:hover {
     background: #94A3B8;
 }
+
+
+QToolButton#ChartTypeCard {
+    background: #FFFFFF;
+    border: 1px solid #D8E4F2;
+    border-radius: 16px;
+    padding: 10px;
+    font-weight: 800;
+    color: #172033;
+}
+
+QToolButton#ChartTypeCard:hover {
+    border: 2px solid #2563EB;
+    background: #F8FBFF;
+}
+
+QToolButton#ChartTypeCard:checked {
+    border: 2px solid #2563EB;
+    background: #EEF6FF;
+}
+
 """

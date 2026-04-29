@@ -42,7 +42,7 @@ from .charting import CHART_TYPES, LANGUAGES, STYLEABLE_CHARTS, THEMES, ChartEng
 from .codegen import generate_reproducible_code
 from .config import load_config
 from .data_model import DataProject, PandasTableModel
-from .dialogs import FeatureSelectionDialog, LLMConfigDialog, ManualDataDialog, StyleEditorDialog
+from .dialogs import ChartTypeDialog, FeatureSelectionDialog, LLMConfigDialog, ManualDataDialog, StyleEditorDialog
 from .llm import LLMChartAssistant
 from .styles import APP_QSS
 from .widgets import ChatInput, MetricCard
@@ -70,7 +70,7 @@ class SciFigureStudio(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._sync_controls_from_spec(self.current_spec)
-        self._append_chat("系统", "欢迎使用升级版工作台。导入 Excel/CSV 后可先查看数据概况，再自由选择特征、X/Y/Z 字段、样本与归一化方式；系统不会自动画图，等待你手动绘制或发送指令。")
+        self._append_chat("系统", "欢迎使用工作台")
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("文件")
@@ -320,6 +320,7 @@ class SciFigureStudio(QMainWindow):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignLeft)
         self.chart_type_box = QComboBox(); self.chart_type_box.addItems(CHART_TYPES)
+        self.chart_type_box.setVisible(False)
         self.theme_box = QComboBox(); self.theme_box.addItems(list(THEMES.keys()))
         self.language_box = QComboBox(); self.language_box.addItems(LANGUAGES)
         self.x_box = QComboBox(); self.y_box = QComboBox(); self.z_box = QComboBox()
@@ -333,8 +334,12 @@ class SciFigureStudio(QMainWindow):
         self.grid_check = QCheckBox("显示网格"); self.grid_check.setChecked(True)
         self.legend_check = QCheckBox("显示图例"); self.legend_check.setChecked(True)
 
+        self.chart_example_btn = QPushButton(f"通过例图选择图表类型：{self.chart_type_box.currentText()}")
+        self.chart_example_btn.setObjectName("Secondary")
+        self.chart_example_btn.clicked.connect(self.open_chart_type_selector)
+
         for label, widget in [
-            ("图表类型", self.chart_type_box),
+            ("", self.chart_example_btn),
             ("主题", self.theme_box),
             ("图表语言", self.language_box),
             ("X 数据列（可选）", self.x_box),
@@ -351,7 +356,7 @@ class SciFigureStudio(QMainWindow):
             form.addRow(label, widget)
         layout.addLayout(form)
 
-        axis_hint = QLabel("X/Y/Z 字段不是必填项。保持“自动”时，系统会根据当前图表类型和数据结构自动选择更合适的字段。")
+        axis_hint = QLabel("X/Y/Z 字段不是必填项。保持“默认”时，系统会根据当前图表类型和数据结构自动选择更合适的字段。")
         axis_hint.setWordWrap(True)
         axis_hint.setObjectName("Subtle")
         layout.addWidget(axis_hint)
@@ -383,6 +388,15 @@ class SciFigureStudio(QMainWindow):
         chart_type = self.chart_type_box.currentText()
         self.style_btn.setEnabled(chart_type in STYLEABLE_CHARTS)
         self.style_btn.setText("打开样式设计器" if chart_type in STYLEABLE_CHARTS else "当前图表无需样式设计器")
+        if hasattr(self, "chart_example_btn"):
+            self.chart_example_btn.setText(f"通过例图选择图表类型：{chart_type}")
+
+
+    def open_chart_type_selector(self) -> None:
+        dialog = ChartTypeDialog(self.assets_dir, self.chart_type_box.currentText(), self)
+        if dialog.exec_() == dialog.Accepted and dialog.selected_chart_type:
+            self.chart_type_box.setCurrentText(dialog.selected_chart_type)
+            self._append_chat("系统", f"已选择图表类型：{dialog.selected_chart_type}")
 
     def open_model_config(self) -> None:
         dialog = LLMConfigDialog(self.config, self)
@@ -395,7 +409,7 @@ class SciFigureStudio(QMainWindow):
     def open_style_editor(self) -> None:
         chart_type = self.chart_type_box.currentText()
         if chart_type not in STYLEABLE_CHARTS:
-            QMessageBox.information(self, "样式设计器", "当前图表类型没有开放配色 / 线型 / 点型样式编辑。请选择散点图、折线图、柱状图、饼图等类型。")
+            QMessageBox.information(self, "样式设计器", "当前图表类型没有开放样式编辑。请通过例图选择支持的图表类型。")
             return
         base_spec = self._spec_from_controls()
         dialog = StyleEditorDialog(base_spec, self)
@@ -417,18 +431,17 @@ class SciFigureStudio(QMainWindow):
         if not self._require_data():
             return
         dialog = FeatureSelectionDialog(self.project.df, self)
-        if dialog.exec_() == dialog.Accepted and dialog.selected_df is not None:
+        if dialog.exec_() == dialog.Accepted:
             try:
-                df = self.project.load_dataframe(dialog.selected_df, name="筛选后的绘图数据")
-                self._on_data_loaded(df)
-
-                # 将用户指定的 X/Y/Z 同步到当前绘图方案，后续按参数绘图或样式调整都会优先使用。
                 updated = self.current_spec.to_dict()
                 updated.update({
+                    "feature_cols": dialog.selected_features,
                     "x": dialog.selected_x,
                     "y": dialog.selected_y,
                     "z": dialog.selected_z,
-                    "normalization": "无",  # 归一化已直接作用到筛选后的绘图数据，避免渲染时重复归一化。
+                    "normalization": dialog.normalization,
+                    "sample_limit": dialog.sample_limit,
+                    "sample_mode": dialog.sample_mode,
                 })
                 self.current_spec = ChartSpec(**updated)
                 self._sync_controls_from_spec(self.current_spec)
@@ -436,6 +449,8 @@ class SciFigureStudio(QMainWindow):
                 details = []
                 if dialog.selected_features:
                     details.append(f"特征列：{', '.join(dialog.selected_features)}")
+                else:
+                    details.append("特征列：默认")
                 if dialog.selected_label:
                     details.append(f"标签列：{dialog.selected_label}")
                 if dialog.selected_x:
@@ -446,8 +461,11 @@ class SciFigureStudio(QMainWindow):
                     details.append(f"Z：{dialog.selected_z}")
                 if dialog.normalization != "无":
                     details.append(f"归一化：{dialog.normalization}")
-                details.append(f"样本：{len(df)} 行")
-                self._append_chat("系统", "已应用数据选择：" + "；".join(details))
+                if dialog.sample_mode != "全部":
+                    details.append(f"样本：{dialog.sample_mode} {dialog.sample_limit} 行")
+                else:
+                    details.append("样本：全部")
+                self._append_chat("系统", "已更新绘图选择：" + "；".join(details) + "。原始数据列仍全部保留。")
             except Exception as exc:
                 self._show_error("数据选择失败", str(exc))
 
@@ -484,7 +502,7 @@ class SciFigureStudio(QMainWindow):
         self._sync_controls_from_spec(spec)
         self._update_code()
         self._update_preview_info(None)
-        self._append_chat("系统", f"已加载 {self.project.name}，共 {len(df)} 行、{len(df.columns)} 列。系统已完成字段分析，但不会自动画图；你可以继续选择字段后点击“按参数绘制”，或在下方让数据助手生成图表。")
+        self._append_chat("系统", f"已加载 {self.project.name}，共 {len(df)} 行、{len(df.columns)} 列。系统已完成字段分析，但不会自动画图；你可以点击“按参数绘制”，或在下方让数据助手生成图表。")
 
     def _refresh_profile(self) -> None:
         profile = self.project.profile()
@@ -495,7 +513,10 @@ class SciFigureStudio(QMainWindow):
         self.profile_text.setMarkdown(profile.to_markdown())
 
     def _refresh_column_boxes(self) -> None:
-        cols = ["自动"] + (list(self.project.df.columns) if self.project.df is not None else [])
+        cols = ["默认"] + (list(self.project.df.columns) if self.project.df is not None else [])
+        for pseudo_col in ["样本序号", "样本数量", "SampleIndex"]:
+            if pseudo_col not in cols:
+                cols.append(pseudo_col)
         for box in [self.x_box, self.y_box, self.z_box]:
             current = box.currentText()
             box.blockSignals(True)
@@ -504,14 +525,14 @@ class SciFigureStudio(QMainWindow):
             if current in cols:
                 box.setCurrentText(current)
             else:
-                box.setCurrentText("自动")
+                box.setCurrentText("默认")
             box.blockSignals(False)
 
 
     def _spec_from_controls(self) -> ChartSpec:
         def val(box: QComboBox) -> str | None:
             text = box.currentText().strip()
-            return None if not text or text == "自动" else text
+            return None if not text or text == "默认" else text
 
         selected_chart_type = self.chart_type_box.currentText()
         base = self.current_spec.to_dict()
@@ -540,11 +561,13 @@ class SciFigureStudio(QMainWindow):
 
     def _sync_controls_from_spec(self, spec: ChartSpec) -> None:
         def set_combo(box: QComboBox, value: str | None) -> None:
-            target = value or "自动"
+            target = value or "默认"
             idx = box.findText(target)
             if idx >= 0:
                 box.setCurrentIndex(idx)
         set_combo(self.chart_type_box, spec.chart_type)
+        if hasattr(self, "chart_example_btn"):
+            self.chart_example_btn.setText(f"通过例图选择图表类型：{self.chart_type_box.currentText()}")
         set_combo(self.theme_box, spec.theme)
         set_combo(self.language_box, spec.language)
         set_combo(self.x_box, spec.x)
@@ -646,9 +669,10 @@ class SciFigureStudio(QMainWindow):
 
         dims = f"{spec.width:.1f} × {spec.height:.1f} in · {spec.dpi} DPI"
         axes = [f"X={spec.x}" if spec.x else None, f"Y={spec.y}" if spec.y else None, f"Z={spec.z}" if spec.z else None]
-        axes_text = " · ".join([a for a in axes if a]) or "字段自动匹配"
+        axes_text = " · ".join([a for a in axes if a]) or "字段默认匹配"
+        legend_text = "显示图例" if spec.legend else "不显示图例"
         self.preview_status.setText(f"当前预览：{spec.chart_type}，可继续在右侧微调参数或打开样式设计器。")
-        self.preview_meta.setText(f"{axes_text} · {dims}")
+        self.preview_meta.setText(f"{axes_text} · {legend_text} · {dims}")
 
     def _update_code(self) -> None:
         data_path = str(self.project.path) if self.project.path else None

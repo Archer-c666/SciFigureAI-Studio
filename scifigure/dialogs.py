@@ -5,7 +5,8 @@ import re
 from dataclasses import replace
 
 import pandas as pd
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -13,6 +14,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -21,6 +23,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QToolButton,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -28,7 +31,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
 )
 
-from .charting import BACKGROUND_STYLES, CORRELATION_METHODS, LINE_STYLES, MARKER_STYLES, NORMALIZATION_METHODS, PALETTE_NAMES, ChartSpec
+from .charting import BACKGROUND_STYLES, CHART_TYPES, CORRELATION_METHODS, LINE_STYLES, MARKER_STYLES, NORMALIZATION_METHODS, PALETTE_NAMES, ChartSpec
 from .config import AppConfig, save_config
 
 
@@ -232,31 +235,93 @@ class ManualDataDialog(QDialog):
         self.accept()
 
 
+class ChartTypeDialog(QDialog):
+    """使用例图选择图表类型。"""
+
+    IMAGE_NAMES = {
+        "柱状图": "bar.png",
+        "水平柱状图": "hbar.png",
+        "折线图": "line.png",
+        "散点图": "scatter.png",
+        "箱线图": "boxplot.png",
+        "热力图": "heatmap.png",
+        "饼图": "pie.png",
+        "三维散点图": "scatter3d.png",
+        "曲面图": "surface.png",
+    }
+
+    def __init__(self, assets_dir, current_type: str = "散点图", parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("通过例图选择图表类型")
+        self.setMinimumSize(780, 620)
+        self.assets_dir = assets_dir
+        self.current_type = current_type
+        self.selected_chart_type: str | None = None
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        hint = QLabel("点击下面的例图选择图表类型。例图仅用于说明样式和用途，不代表你的实际数据。")
+        hint.setWordWrap(True)
+        hint.setObjectName("Subtle")
+        layout.addWidget(hint)
+
+        grid = QGridLayout()
+        grid.setSpacing(14)
+        example_dir = self.assets_dir / "chart_examples"
+
+        for idx, chart_type in enumerate(CHART_TYPES):
+            button = QToolButton()
+            button.setText(chart_type)
+            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            button.setIconSize(QSize(190, 135))
+            button.setMinimumSize(220, 185)
+            button.setCheckable(True)
+            button.setChecked(chart_type == self.current_type)
+            button.setObjectName("ChartTypeCard")
+            image_name = self.IMAGE_NAMES.get(chart_type)
+            if image_name:
+                image_path = example_dir / image_name
+                if image_path.exists():
+                    button.setIcon(QIcon(str(image_path)))
+            button.clicked.connect(lambda _=False, ct=chart_type: self._choose(ct))
+            grid.addWidget(button, idx // 3, idx % 3)
+
+        layout.addLayout(grid, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _choose(self, chart_type: str) -> None:
+        self.selected_chart_type = chart_type
+        self.accept()
+
+
 class FeatureSelectionDialog(QDialog):
-    """选择当前表格中的特征列、标签列、X/Y/Z 字段和样本数量。"""
+    """记录特征、标签、X/Y/Z、采样和归一化配置，但不删除原始数据列。"""
 
     def __init__(self, df: pd.DataFrame, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("选择特征 / 标签 / X-Y-Z / 样本")
-        self.setMinimumSize(720, 640)
+        self.setMinimumSize(740, 660)
         self.source_df = df
-        self.selected_df: pd.DataFrame | None = None
         self.selected_features: list[str] = []
         self.selected_label: str | None = None
         self.selected_x: str | None = None
         self.selected_y: str | None = None
         self.selected_z: str | None = None
         self.normalization: str = "无"
-        self.sample_limit: int = len(df)
-        self.sample_mode: str = "前 N 行"
+        self.sample_limit: int = 0
+        self.sample_mode: str = "全部"
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         hint = QLabel(
-            "选择用于绘图的特征列、标签列，并可按需指定图表的 X/Y/Z 字段。"
-            "X/Y/Z 都是可选项：二维图通常只需要 X/Y，三维图才需要 Z；若保持“自动”，系统会后续自动匹配。"
-            "归一化只作用于当前筛选后的绘图数据，不会修改原始文件。"
+            "选择特征列、标签列，并可按需指定图表的 X/Y/Z 字段。"
+            "不勾选的字段不会从数据表中删除，下次仍可重新选择。"
+            "X/Y/Z 都是可选项：二维图通常只需要 X/Y，三维图才需要 Z；保持“默认”时系统会自动匹配。"
         )
         hint.setWordWrap(True)
         hint.setObjectName("Subtle")
@@ -269,6 +334,9 @@ class FeatureSelectionDialog(QDialog):
 
         numeric_cols = list(map(str, self.source_df.select_dtypes("number").columns))
         all_cols = list(map(str, self.source_df.columns))
+        for pseudo_col in ["样本序号", "样本数量", "SampleIndex"]:
+            if pseudo_col not in all_cols:
+                all_cols.append(pseudo_col)
         for col in all_cols:
             item = QListWidgetItem(col)
             item.setCheckState(Qt.Checked if col in numeric_cols else Qt.Unchecked)
@@ -280,7 +348,7 @@ class FeatureSelectionDialog(QDialog):
 
         def make_axis_box() -> QComboBox:
             box = QComboBox()
-            box.addItem("自动")
+            box.addItem("默认")
             box.addItems(all_cols)
             return box
 
@@ -291,11 +359,11 @@ class FeatureSelectionDialog(QDialog):
         self.normalization_box = QComboBox()
         self.normalization_box.addItems(NORMALIZATION_METHODS)
 
+        self.sample_mode_box = QComboBox()
+        self.sample_mode_box.addItems(["全部", "前 N 行", "随机 N 行"])
         self.sample_spin = QSpinBox()
         self.sample_spin.setRange(1, max(1, len(self.source_df)))
         self.sample_spin.setValue(min(len(self.source_df), 500))
-        self.sample_mode_box = QComboBox()
-        self.sample_mode_box.addItems(["前 N 行", "随机 N 行"])
 
         form.addRow("特征列", self.feature_list)
         form.addRow("标签列", self.label_box)
@@ -303,8 +371,8 @@ class FeatureSelectionDialog(QDialog):
         form.addRow("指定 Y", self.y_box)
         form.addRow("指定 Z（三维图）", self.z_box)
         form.addRow("归一化", self.normalization_box)
-        form.addRow("样本数量", self.sample_spin)
         form.addRow("样本方式", self.sample_mode_box)
+        form.addRow("样本数量", self.sample_spin)
         layout.addLayout(form)
 
         quick = QHBoxLayout()
@@ -344,22 +412,7 @@ class FeatureSelectionDialog(QDialog):
     @staticmethod
     def _axis_value(box: QComboBox) -> str | None:
         text = box.currentText().strip()
-        return None if text == "自动" else text
-
-    def _apply_normalization(self, df: pd.DataFrame, method: str) -> pd.DataFrame:
-        if method == "无":
-            return df
-        out = df.copy()
-        numeric_cols = list(out.select_dtypes("number").columns)
-        for col in numeric_cols:
-            values = pd.to_numeric(out[col], errors="coerce")
-            if method == "Min-Max":
-                vmin, vmax = values.min(), values.max()
-                out[col] = 0.0 if pd.isna(vmin) or pd.isna(vmax) or vmax == vmin else (values - vmin) / (vmax - vmin)
-            elif method == "Z-score":
-                mean, std = values.mean(), values.std(ddof=0)
-                out[col] = 0.0 if pd.isna(std) or std == 0 else (values - mean) / std
-        return out
+        return None if text == "默认" else text
 
     def _apply(self) -> None:
         features: list[str] = []
@@ -372,36 +425,14 @@ class FeatureSelectionDialog(QDialog):
         if label == "不选择标签列":
             label = None
 
-        x = self._axis_value(self.x_box)
-        y = self._axis_value(self.y_box)
-        z = self._axis_value(self.z_box)
-
-        cols = list(dict.fromkeys(features + ([label] if label else []) + ([x] if x else []) + ([y] if y else []) + ([z] if z else [])))
-        if not cols:
-            QMessageBox.critical(self, "选择失败", "请至少选择一个特征列、标签列或 X/Y/Z 字段。")
-            return
-
-        df = self.source_df[cols].copy()
-        sample_limit = int(self.sample_spin.value())
-        sample_mode = self.sample_mode_box.currentText()
-        if len(df) > sample_limit:
-            if sample_mode == "随机 N 行":
-                df = df.sample(n=sample_limit, random_state=42).sort_index()
-            else:
-                df = df.head(sample_limit)
-
-        normalization = self.normalization_box.currentText()
-        df = self._apply_normalization(df, normalization)
-
-        self.selected_df = df
         self.selected_features = features
         self.selected_label = label
-        self.selected_x = x
-        self.selected_y = y
-        self.selected_z = z
-        self.normalization = normalization
-        self.sample_limit = sample_limit
-        self.sample_mode = sample_mode
+        self.selected_x = self._axis_value(self.x_box)
+        self.selected_y = self._axis_value(self.y_box)
+        self.selected_z = self._axis_value(self.z_box)
+        self.normalization = self.normalization_box.currentText()
+        self.sample_mode = self.sample_mode_box.currentText()
+        self.sample_limit = 0 if self.sample_mode == "全部" else int(self.sample_spin.value())
         self.accept()
 
 
@@ -423,6 +454,8 @@ class StyleEditorDialog(QDialog):
             "折线图": "折线图默认只显示连续趋势线，不显示散点节点；可在这里调整线型、线宽、是否显示节点。",
             "散点图": "散点图主要调整点大小、点类型、配色和背景。",
             "柱状图": "柱状图会自动按分类聚合数值，避免类别太多导致混乱；可设置显示前 N 个类别和数值标签。",
+            "水平柱状图": "水平柱状图适合类别名称较长的分组比较；可设置显示前 N 个类别和数值标签。",
+            "箱线图": "箱线图适合查看一个或多个数值特征的分布、离群点和组间差异。",
             "饼图": "饼图会自动按分类聚合并限制类别数量；可设置环形图、显示前 N 个类别和百分比标签。",
             "热力图": "热力图会读取所有数值列并计算相关系数；可选择 Spearman、Pearson 或 Kendall。",
             "三维散点图": "三维散点图需要 X、Y、Z 三个数值列；可调整点大小、点类型和配色。",
@@ -471,10 +504,14 @@ class StyleEditorDialog(QDialog):
             form.addRow("点类型", self.marker_box)
             form.addRow("点大小", self.point_size_spin)
 
-        elif chart_type == "柱状图":
-            self.bar_top_n_spin = QSpinBox(); self.bar_top_n_spin.setRange(3, 50)
+        elif chart_type in {"柱状图", "水平柱状图"}:
+            self.bar_top_n_spin = QSpinBox(); self.bar_top_n_spin.setRange(3, 80)
             form.addRow("最多显示类别数", self.bar_top_n_spin)
             form.addRow("", self.value_label_check)
+
+        elif chart_type == "箱线图":
+            self.heatmap_max_features_spin = QSpinBox(); self.heatmap_max_features_spin.setRange(1, 40)
+            form.addRow("最多显示特征数", self.heatmap_max_features_spin)
 
         elif chart_type == "饼图":
             self.pie_top_n_spin = QSpinBox(); self.pie_top_n_spin.setRange(3, 20)

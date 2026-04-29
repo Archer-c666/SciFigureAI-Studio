@@ -127,6 +127,7 @@ class LLMChartAssistant:
 
         schema = {
             "columns": list(df.columns),
+            "virtual_columns": ["样本序号", "样本数量", "SampleIndex"],
             "dtypes": dtypes,
             "rows": len(df),
             "numeric_columns": numeric_cols,
@@ -154,7 +155,7 @@ class LLMChartAssistant:
 如果用户要求绘图：
 {{
   "type": "plot",
-  "chart_type": "柱状图/折线图/散点图/热力图/饼图/三维散点图/曲面图",
+  "chart_type": "柱状图/水平柱状图/折线图/散点图/箱线图/热力图/饼图/三维散点图/曲面图",
   "x": "列名或null",
   "y": "列名或null",
   "z": "列名或null，三维散点图和曲面图必须给出",
@@ -215,7 +216,7 @@ class LLMChartAssistant:
 
     @staticmethod
     def _spec_from_payload(payload: dict[str, Any], df: pd.DataFrame, language: str) -> ChartSpec:
-        valid_cols = set(df.columns)
+        valid_cols = set(df.columns) | {"样本序号", "样本数量", "SampleIndex"}
 
         def col(value: Any) -> str | None:
             if value in {None, "", "null", "None"}:
@@ -275,8 +276,11 @@ class LLMChartAssistant:
         if len(numeric_cols) >= 2:
             chart_suggestions.append("热力图（数值特征之间的 Spearman 相关性）")
             chart_suggestions.append("散点图（两个数值特征之间的关系）")
+            chart_suggestions.append("箱线图（多个数值特征分布对比）")
+        if len(numeric_cols) >= 1:
+            chart_suggestions.append("折线图/散点图（某个特征与样本数量或样本序号的关系）")
         if numeric_cols and cat_cols:
-            chart_suggestions.append("柱状图（分类字段与数值字段的均值比较）")
+            chart_suggestions.append("柱状图或水平柱状图（分类字段与数值字段的均值比较）")
             chart_suggestions.append("饼图（分类字段与非负数值字段的组成比例）")
         if numeric_cols:
             chart_suggestions.append("折线图（如果存在时间、序号或实验步骤字段）")

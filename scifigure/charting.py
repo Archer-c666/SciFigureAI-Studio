@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import matplotlib
@@ -16,7 +16,7 @@ import seaborn as sns
 from matplotlib.figure import Figure
 
 
-CHART_TYPES = ["柱状图", "折线图", "散点图", "热力图", "饼图", "三维散点图", "曲面图"]
+CHART_TYPES = ["柱状图", "水平柱状图", "折线图", "散点图", "箱线图", "热力图", "饼图", "三维散点图", "曲面图"]
 LANGUAGES = ["纯科研英语", "中文"]
 
 PALETTE_NAMES = ["海洋蓝", "极光紫", "日落橙", "森林绿", "珊瑚红", "单色灰"]
@@ -109,6 +109,9 @@ class ChartSpec:
     heatmap_decimals: int = 4
     normalization: str = "无"
     surface_alpha: float = 0.92
+    feature_cols: list[str] = field(default_factory=list)
+    sample_limit: int = 0
+    sample_mode: str = "全部"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -160,7 +163,7 @@ class ChartEngine:
     def request_is_plot(request: str) -> bool:
         text = request.lower().strip()
         consult_words = ["适合", "建议", "能不能", "可以画什么", "该画什么", "怎么画", "解释", "分析一下", "总结", "概览", "有哪些", "多少", "字段", "缺失", "重复", "为什么", "recommend", "suggest", "what chart", "which chart", "explain", "summary", "overview"]
-        explicit_chart_words = ["柱状图", "条形图", "折线图", "散点图", "热力图", "饼图", "三维", "3d", "曲面", "bar chart", "line chart", "scatter", "heatmap", "pie chart", "surface"]
+        explicit_chart_words = ["柱状图", "水平柱状图", "条形图", "箱线图", "箱型图", "折线图", "散点图", "热力图", "饼图", "三维", "3d", "曲面", "bar chart", "horizontal bar", "boxplot", "box plot", "line chart", "scatter", "heatmap", "pie chart", "surface"]
         explicit_action_words = ["绘制", "生成图", "生成一张", "画图", "画一个", "画一张", "画出", "作图", "出图", "可视化", "plot", "draw", "visualize"]
         has_consult = any(w in text for w in consult_words)
         has_explicit = any(w in text for w in explicit_chart_words) or any(w in text for w in explicit_action_words)
@@ -177,6 +180,21 @@ class ChartEngine:
         mentioned_numeric = ChartEngine._mentioned_columns(df, request_l, numeric)
         mentioned_categorical = ChartEngine._mentioned_columns(df, request_l, categorical)
         t = lambda cn, en: ChartEngine._title(cn, en, language)
+
+        # 用户常见需求：Excel 里只有一组特征列，但想看“某个特征随样本数量/样本序号变化”。
+        # 这里使用软件内置的伪字段“样本序号/样本数量”作为 X，不要求 Excel 中真实存在该列。
+        if any(k in request_l for k in ["样本数量", "样本数", "样本序号", "sample number", "sample count", "sample index"]):
+            y = mentioned_numeric[0] if mentioned_numeric else (numeric[0] if numeric else None)
+            chart_type = "散点图" if any(k in request_l for k in ["散点", "scatter"]) else "折线图"
+            return ChartSpec(chart_type=chart_type, x="样本数量", y=y, title=t("特征随样本数量变化", "Feature vs sample count"), xlabel=t("样本数量", "Sample count"), language=language)
+
+        if any(k in request_l for k in ["箱线", "箱型", "box", "boxplot"]):
+            x = mentioned_categorical[0] if mentioned_categorical else (categorical[0] if categorical else None)
+            y = mentioned_numeric[0] if mentioned_numeric else (numeric[0] if numeric else None)
+            return ChartSpec(chart_type="箱线图", x=x, y=y, title=t("特征分布箱线图", "Feature distribution boxplot"), language=language)
+
+        if any(k in request_l for k in ["水平柱", "横向柱", "水平条形", "horizontal bar"]):
+            return ChartSpec(chart_type="水平柱状图", x=(mentioned_categorical[0] if mentioned_categorical else (categorical[0] if categorical else (all_cols[0] if all_cols else None))), y=(mentioned_numeric[0] if mentioned_numeric else (numeric[0] if numeric else None)), title=t("水平组间比较", "Horizontal group comparison"), language=language)
 
         if any(k in request_l for k in ["曲面", "surface"]):
             x = mentioned_numeric[0] if len(mentioned_numeric) >= 1 else (numeric[0] if numeric else None)
@@ -214,9 +232,11 @@ class ChartEngine:
         if df.empty:
             raise ValueError("数据为空，无法绘图。请先导入有效数据。")
 
+        df = self._with_sample_columns(df)
         spec = self._repair_spec(df, spec)
         spec = self._validate_and_complete_spec(df, spec)
-        plot_df = self._normalized_copy(df, spec)
+        plot_df = self._sampled_copy(df, spec)
+        plot_df = self._normalized_copy(plot_df, spec)
         self._apply_theme(spec.theme)
 
         fig_width = spec.width
@@ -242,15 +262,6 @@ class ChartEngine:
             if data.empty:
                 raise ValueError("散点图在移除缺失值后没有可用数据。")
             ax.scatter(data[spec.x], data[spec.y], s=spec.point_size, c=colors[0], alpha=0.88, edgecolors="white", linewidths=0.8, marker=marker)
-            if len(data) >= 3:
-                x_num = pd.to_numeric(data[spec.x], errors="coerce")
-                y_num = pd.to_numeric(data[spec.y], errors="coerce")
-                mask = x_num.notna() & y_num.notna()
-                if mask.sum() >= 3:
-                    zfit = np.polyfit(x_num[mask], y_num[mask], 1)
-                    xs = np.linspace(x_num[mask].min(), x_num[mask].max(), 100)
-                    ax.plot(xs, np.poly1d(zfit)(xs), color=colors[2], linestyle="--", linewidth=1.8, alpha=0.72)
-
         elif spec.chart_type == "折线图":
             data = plot_df[[spec.x, spec.y]].dropna().copy()
             if data.empty:
@@ -275,6 +286,38 @@ class ChartEngine:
                     label.set_rotation(35)
                     label.set_horizontalalignment("right")
 
+        elif spec.chart_type == "水平柱状图":
+            data = self._prepare_bar_or_pie_data(plot_df, spec, max_categories=max(1, spec.bar_top_n))
+            bars = ax.barh(data[spec.x].astype(str), data[spec.y], color=self._palette_colors(spec.palette, len(data)), edgecolor="white", linewidth=1.0)
+            ax.invert_yaxis()
+            if spec.show_value_labels:
+                ax.bar_label(bars, padding=3, fontsize=8)
+
+        elif spec.chart_type == "箱线图":
+            if spec.x and spec.y and spec.x in plot_df.columns and spec.y in plot_df.columns and not pd.api.types.is_numeric_dtype(plot_df[spec.x]):
+                data = plot_df[[spec.x, spec.y]].dropna().copy()
+                data[spec.y] = pd.to_numeric(data[spec.y], errors="coerce")
+                data = data.dropna(subset=[spec.y])
+                if data.empty:
+                    raise ValueError("箱线图在移除缺失值后没有可用数据。")
+                sns.boxplot(data=data, x=spec.x, y=spec.y, ax=ax, color=colors[0])
+                if data[spec.x].nunique() <= 12:
+                    sns.stripplot(data=data, x=spec.x, y=spec.y, ax=ax, color=colors[2], size=3, alpha=0.35, jitter=0.2)
+            else:
+                numeric_cols = [c for c in spec.feature_cols if c in self._numeric_cols(plot_df)] or self._numeric_cols(plot_df)
+                if len(numeric_cols) == 0:
+                    raise ValueError("箱线图需要至少 1 个数值列。")
+                numeric_cols = numeric_cols[:max(1, min(20, spec.heatmap_max_features))]
+                data = plot_df[numeric_cols].apply(pd.to_numeric, errors="coerce").dropna(how="all")
+                if data.empty:
+                    raise ValueError("箱线图没有可用数值数据。")
+                sns.boxplot(data=data, ax=ax, palette=self._palette_colors(spec.palette, len(numeric_cols)))
+                ax.set_xlabel("Features" if spec.language == "纯科研英语" else "特征")
+                ax.set_ylabel("Value" if spec.language == "纯科研英语" else "数值")
+                for label in ax.get_xticklabels():
+                    label.set_rotation(30)
+                    label.set_horizontalalignment("right")
+
         elif spec.chart_type == "饼图":
             data = self._prepare_bar_or_pie_data(plot_df, spec, max_categories=max(1, spec.pie_top_n))
             wedgeprops = {"edgecolor": "white", "linewidth": 1.5}
@@ -288,7 +331,10 @@ class ChartEngine:
             ax.set_ylabel("")
 
         elif spec.chart_type == "热力图":
-            numeric_df = plot_df[self._numeric_cols(plot_df)].dropna(axis=1, how="all")
+            numeric_cols = self._numeric_cols(plot_df)
+            selected_numeric = [c for c in spec.feature_cols if c in numeric_cols]
+            use_cols = selected_numeric if len(selected_numeric) >= 2 else numeric_cols
+            numeric_df = plot_df[use_cols].dropna(axis=1, how="all")
             if numeric_df.shape[1] < 2:
                 raise ValueError("热力图需要至少 2 个数值列，当前数据不适合绘制相关性热力图。")
             numeric_df = numeric_df.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
@@ -332,6 +378,26 @@ class ChartEngine:
         self.last_spec = spec
         self.last_figure = fig
         return fig
+
+    @staticmethod
+    def _with_sample_columns(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        n = len(out)
+        values = np.arange(1, n + 1)
+        if "样本序号" not in out.columns:
+            out["样本序号"] = values
+        if "样本数量" not in out.columns:
+            out["样本数量"] = values
+        if "SampleIndex" not in out.columns:
+            out["SampleIndex"] = values
+        return out
+
+    def _sampled_copy(self, df: pd.DataFrame, spec: ChartSpec) -> pd.DataFrame:
+        if not spec.sample_limit or spec.sample_mode == "全部" or len(df) <= spec.sample_limit:
+            return df.copy()
+        if spec.sample_mode == "随机 N 行":
+            return df.sample(n=spec.sample_limit, random_state=42).sort_index()
+        return df.head(spec.sample_limit).copy()
 
     def _normalized_copy(self, df: pd.DataFrame, spec: ChartSpec) -> pd.DataFrame:
         if spec.normalization == "无":
@@ -398,15 +464,25 @@ class ChartEngine:
             if spec.x is None:
                 raise ValueError("折线图需要 X 列和数值 Y 列。")
 
-        elif spec.chart_type == "柱状图":
+        elif spec.chart_type in {"柱状图", "水平柱状图"}:
             if not numeric:
-                raise ValueError("柱状图需要至少 1 个数值列作为 Y；当前数据不适合绘制柱状图。")
+                raise ValueError(f"{spec.chart_type} 需要至少 1 个数值列作为 Y；当前数据不适合绘制。")
             if not categorical:
-                raise ValueError("柱状图需要一个分类列或低基数分组列；当前数据没有合适的分类字段，直接绘制会非常混乱。")
+                raise ValueError(f"{spec.chart_type} 需要一个分类列或低基数分组列；当前数据没有合适的分类字段，直接绘制会非常混乱。")
             if not valid(spec.x) or spec.x not in categorical:
                 spec.x = categorical[0]
             if not valid(spec.y) or not pd.api.types.is_numeric_dtype(df[spec.y]) or spec.y == spec.x:
                 spec.y = next((c for c in numeric if c != spec.x), numeric[0])
+
+        elif spec.chart_type == "箱线图":
+            if not numeric:
+                raise ValueError("箱线图需要至少 1 个数值列；当前数据不适合绘制箱线图。")
+            # 若用户指定了分类 X 与数值 Y，则画分组箱线图；否则画多个数值特征的分布箱线图。
+            if valid(spec.x) and spec.x in categorical and valid(spec.y) and pd.api.types.is_numeric_dtype(df[spec.y]):
+                pass
+            else:
+                spec.x = spec.x if valid(spec.x) and spec.x in categorical else (categorical[0] if categorical else None)
+                spec.y = spec.y if valid(spec.y) and pd.api.types.is_numeric_dtype(df[spec.y]) else numeric[0]
 
         elif spec.chart_type == "饼图":
             if not numeric:
@@ -447,8 +523,8 @@ class ChartEngine:
     @staticmethod
     def _default_title(spec: ChartSpec) -> str:
         if spec.language == "中文":
-            return {"柱状图": "组间比较", "折线图": "趋势分析", "散点图": "变量关系", "热力图": "特征相关性热力图", "饼图": "组成比例", "三维散点图": "三维变量关系", "曲面图": "三维曲面"}.get(spec.chart_type, spec.chart_type)
-        return {"柱状图": "Group comparison", "折线图": "Trend analysis", "散点图": "Variable relationship", "热力图": "Feature correlation heatmap", "饼图": "Composition", "三维散点图": "3D variable relationship", "曲面图": "3D surface"}.get(spec.chart_type, spec.chart_type)
+            return {"柱状图": "组间比较", "水平柱状图": "水平组间比较", "折线图": "趋势分析", "散点图": "变量关系", "箱线图": "特征分布箱线图", "热力图": "特征相关性热力图", "饼图": "组成比例", "三维散点图": "三维变量关系", "曲面图": "三维曲面"}.get(spec.chart_type, spec.chart_type)
+        return {"柱状图": "Group comparison", "水平柱状图": "Horizontal group comparison", "折线图": "Trend analysis", "散点图": "Variable relationship", "箱线图": "Feature distribution boxplot", "热力图": "Feature correlation heatmap", "饼图": "Composition", "三维散点图": "3D variable relationship", "曲面图": "3D surface"}.get(spec.chart_type, spec.chart_type)
 
     @staticmethod
     def _prepare_bar_or_pie_data(df: pd.DataFrame, spec: ChartSpec, max_categories: int) -> pd.DataFrame:
@@ -513,6 +589,10 @@ class ChartEngine:
         fixed.bar_top_n = max(3, min(80, int(fixed.bar_top_n)))
         fixed.pie_top_n = max(3, min(30, int(fixed.pie_top_n)))
         fixed.surface_alpha = max(0.1, min(1.0, float(fixed.surface_alpha)))
+        fixed.feature_cols = [c for c in (fixed.feature_cols or []) if c in df.columns]
+        fixed.sample_limit = max(0, min(len(df), int(fixed.sample_limit or 0)))
+        if fixed.sample_mode not in {"全部", "前 N 行", "随机 N 行"}:
+            fixed.sample_mode = "全部"
 
         def valid(col: str | None) -> str | None:
             return col if col in df.columns else None
