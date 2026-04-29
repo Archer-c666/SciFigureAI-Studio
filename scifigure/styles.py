@@ -1,14 +1,14 @@
 APP_QSS = """
 QMainWindow {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #EEF4FF, stop:0.48 #F8FBFF, stop:1 #F3F4F6);
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #EEF4FF, stop:0.42 #F8FBFF, stop:1 #F2F7FE);
 }
 QWidget {
     color: #172033;
     font-size: 13px;
 }
 QMenuBar {
-    background: rgba(255,255,255,0.78);
-    border-bottom: 1px solid #E2E8F0;
+    background: rgba(255,255,255,0.82);
+    border-bottom: 1px solid #DFE9F5;
     padding: 4px;
 }
 QMenuBar::item {
@@ -22,7 +22,7 @@ QMenuBar::item:selected {
 QMenu {
     background: #FFFFFF;
     border: 1px solid #E2E8F0;
-    border-radius: 10px;
+    border-radius: 12px;
     padding: 6px;
 }
 QMenu::item {
@@ -32,19 +32,19 @@ QMenu::item {
 QMenu::item:selected {
     background: #DBEAFE;
 }
-QFrame#SidePanel, QFrame#Inspector, QFrame#Card, QTextEdit, QPlainTextEdit, QTableView {
+QFrame#SidePanel, QFrame#Inspector, QFrame#Card, QTextEdit, QPlainTextEdit, QTableView, QLabel#MascotCard {
     background: rgba(255,255,255,0.96);
     border: 1px solid #E2E8F0;
-    border-radius: 18px;
+    border-radius: 20px;
 }
 QFrame#SidePanel, QFrame#Inspector {
     border: 1px solid #D8E2F3;
 }
 QLabel#AppTitle {
     color: #0F172A;
-    font-size: 24px;
+    font-size: 26px;
     font-weight: 900;
-    letter-spacing: 0.2px;
+    letter-spacing: 0.25px;
 }
 QLabel#Subtle {
     color: #64748B;
@@ -61,7 +61,7 @@ QLabel#MetricName {
 QPushButton {
     background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2563EB, stop:1 #4F46E5);
     border: none;
-    border-radius: 13px;
+    border-radius: 14px;
     color: white;
     padding: 10px 15px;
     font-weight: 800;

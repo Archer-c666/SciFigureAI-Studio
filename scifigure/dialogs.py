@@ -11,10 +11,13 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -22,20 +25,20 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QVBoxLayout,
     QWidget,
+    QAbstractItemView,
 )
 
+from .charting import BACKGROUND_STYLES, CORRELATION_METHODS, LINE_STYLES, MARKER_STYLES, NORMALIZATION_METHODS, PALETTE_NAMES, ChartSpec
 from .config import AppConfig, save_config
 
 
 class LLMConfigDialog(QDialog):
-    """A small in-app settings panel for OpenAI-compatible model providers."""
-
     PRESETS = {
         "OpenAI": ("https://api.openai.com/v1", "gpt-4.1-mini"),
-        "DeepSeek": ("https://api.deepseek.com", "deepseek-chat"),
+        "DeepSeek": ("https://api.deepseek.com", "deepseek-v4-flash"),
         "DeepSeek Reasoner": ("https://api.deepseek.com", "deepseek-reasoner"),
         "自定义 OpenAI-compatible": ("", ""),
-        "本地规则模式（不调用大模型）": ("", ""),
+        "本地规则模式（不调用大模型）": ("", "local-rule-mode"),
     }
 
     def __init__(self, config: AppConfig, parent=None) -> None:
@@ -49,7 +52,7 @@ class LLMConfigDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        hint = QLabel("选择或填写 OpenAI-compatible 接口。留空 API Key 时，软件会使用本地规则生成图表。")
+        hint = QLabel("在这里直接配置 API Key、Base URL 和模型名；保存后会写入项目根目录下的 .env 文件。")
         hint.setWordWrap(True)
         hint.setObjectName("Subtle")
         layout.addWidget(hint)
@@ -59,13 +62,10 @@ class LLMConfigDialog(QDialog):
         self.provider_box.addItems(list(self.PRESETS.keys()))
         self.provider_box.currentTextChanged.connect(self._apply_preset)
         self.base_url_edit = QLineEdit()
-        self.base_url_edit.setPlaceholderText("例如：https://api.openai.com/v1 或 https://api.deepseek.com")
         self.model_edit = QLineEdit()
-        self.model_edit.setPlaceholderText("例如：gpt-4.1-mini / deepseek-chat / your-model")
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.Password)
-        self.api_key_edit.setPlaceholderText("sk-... 或服务商提供的 API Key")
-        self.show_key_check = QCheckBox("显示 Key")
+        self.show_key_check = QCheckBox("显示 API Key")
         self.show_key_check.stateChanged.connect(self._toggle_key_visible)
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(5, 300)
@@ -139,8 +139,6 @@ class LLMConfigDialog(QDialog):
 
 
 class ManualDataDialog(QDialog):
-    """Dialog for typing/pasting data without opening a file."""
-
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("手动输入 / 粘贴数据")
@@ -177,7 +175,9 @@ class ManualDataDialog(QDialog):
         self.header_check = QCheckBox("第一行是列名")
         self.header_check.setChecked(True)
         self.table_text = QPlainTextEdit()
-        self.table_text.setPlaceholderText("从 Excel 复制后直接粘贴，例如：\nSample\tGroup\tValue\nA\tControl\t1.2\nB\tTreatment\t2.4\n\n也支持 CSV：\nSample,Group,Value\nA,Control,1.2")
+        self.table_text.setPlaceholderText(
+            "从 Excel 复制后直接粘贴，例如：\nSample\tGroup\tValue\nA\tControl\t1.2\nB\tTreatment\t2.4\n\n也支持 CSV：\nSample,Group,Value\nA,Control,1.2"
+        )
         table_layout.addWidget(self.header_check)
         table_layout.addWidget(self.table_text, 1)
         self.tabs.addTab(table_page, "表格文本 / Excel 粘贴")
@@ -188,15 +188,13 @@ class ManualDataDialog(QDialog):
         layout.addWidget(buttons)
 
     def _parse_values(self, text: str) -> list[str]:
-        parts = [p for p in re.split(r"[\n,;，；\s]+", text.strip()) if p != ""]
-        return parts
+        return [p for p in re.split(r"[\n,;，；\s]+", text.strip()) if p != ""]
 
     @staticmethod
     def _convert_columns(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         for col in df.columns:
-            converted = pd.to_numeric(df[col], errors="ignore")
-            df[col] = converted
+            df[col] = pd.to_numeric(df[col], errors="ignore")
         return df
 
     def _parse_xy(self) -> pd.DataFrame:
@@ -218,7 +216,6 @@ class ManualDataDialog(QDialog):
         try:
             df = pd.read_csv(io.StringIO(text), sep=None, engine="python", header=header)
         except Exception:
-            # Excel pasted tables are usually tab-delimited; retry explicitly.
             df = pd.read_csv(io.StringIO(text), sep="\t", header=header)
         if header is None:
             df.columns = [f"col_{i + 1}" for i in range(len(df.columns))]
@@ -228,11 +225,343 @@ class ManualDataDialog(QDialog):
 
     def _parse(self) -> None:
         try:
-            if self.tabs.currentIndex() == 0:
-                self.df = self._parse_xy()
-            else:
-                self.df = self._parse_table()
+            self.df = self._parse_xy() if self.tabs.currentIndex() == 0 else self._parse_table()
         except Exception as exc:
             QMessageBox.critical(self, "数据解析失败", str(exc))
             return
+        self.accept()
+
+
+class FeatureSelectionDialog(QDialog):
+    """选择当前表格中的特征列、标签列、X/Y/Z 字段和样本数量。"""
+
+    def __init__(self, df: pd.DataFrame, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("选择特征 / 标签 / X-Y-Z / 样本")
+        self.setMinimumSize(720, 640)
+        self.source_df = df
+        self.selected_df: pd.DataFrame | None = None
+        self.selected_features: list[str] = []
+        self.selected_label: str | None = None
+        self.selected_x: str | None = None
+        self.selected_y: str | None = None
+        self.selected_z: str | None = None
+        self.normalization: str = "无"
+        self.sample_limit: int = len(df)
+        self.sample_mode: str = "前 N 行"
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            "选择用于绘图的特征列、标签列，并可按需指定图表的 X/Y/Z 字段。"
+            "X/Y/Z 都是可选项：二维图通常只需要 X/Y，三维图才需要 Z；若保持“自动”，系统会后续自动匹配。"
+            "归一化只作用于当前筛选后的绘图数据，不会修改原始文件。"
+        )
+        hint.setWordWrap(True)
+        hint.setObjectName("Subtle")
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        self.feature_list = QListWidget()
+        self.feature_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        self.feature_list.setMinimumHeight(260)
+
+        numeric_cols = list(map(str, self.source_df.select_dtypes("number").columns))
+        all_cols = list(map(str, self.source_df.columns))
+        for col in all_cols:
+            item = QListWidgetItem(col)
+            item.setCheckState(Qt.Checked if col in numeric_cols else Qt.Unchecked)
+            self.feature_list.addItem(item)
+
+        self.label_box = QComboBox()
+        self.label_box.addItem("不选择标签列")
+        self.label_box.addItems(all_cols)
+
+        def make_axis_box() -> QComboBox:
+            box = QComboBox()
+            box.addItem("自动")
+            box.addItems(all_cols)
+            return box
+
+        self.x_box = make_axis_box()
+        self.y_box = make_axis_box()
+        self.z_box = make_axis_box()
+
+        self.normalization_box = QComboBox()
+        self.normalization_box.addItems(NORMALIZATION_METHODS)
+
+        self.sample_spin = QSpinBox()
+        self.sample_spin.setRange(1, max(1, len(self.source_df)))
+        self.sample_spin.setValue(min(len(self.source_df), 500))
+        self.sample_mode_box = QComboBox()
+        self.sample_mode_box.addItems(["前 N 行", "随机 N 行"])
+
+        form.addRow("特征列", self.feature_list)
+        form.addRow("标签列", self.label_box)
+        form.addRow("指定 X", self.x_box)
+        form.addRow("指定 Y", self.y_box)
+        form.addRow("指定 Z（三维图）", self.z_box)
+        form.addRow("归一化", self.normalization_box)
+        form.addRow("样本数量", self.sample_spin)
+        form.addRow("样本方式", self.sample_mode_box)
+        layout.addLayout(form)
+
+        quick = QHBoxLayout()
+        select_numeric_btn = QPushButton("选择全部数值列")
+        select_numeric_btn.setObjectName("Secondary")
+        select_numeric_btn.clicked.connect(self._select_numeric)
+        select_all_btn = QPushButton("全选")
+        select_all_btn.setObjectName("Secondary")
+        select_all_btn.clicked.connect(self._select_all)
+        clear_btn = QPushButton("清空")
+        clear_btn.setObjectName("Secondary")
+        clear_btn.clicked.connect(self._clear)
+        quick.addWidget(select_numeric_btn)
+        quick.addWidget(select_all_btn)
+        quick.addWidget(clear_btn)
+        layout.addLayout(quick)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._apply)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _select_numeric(self) -> None:
+        numeric_cols = set(map(str, self.source_df.select_dtypes("number").columns))
+        for i in range(self.feature_list.count()):
+            item = self.feature_list.item(i)
+            item.setCheckState(Qt.Checked if item.text() in numeric_cols else Qt.Unchecked)
+
+    def _select_all(self) -> None:
+        for i in range(self.feature_list.count()):
+            self.feature_list.item(i).setCheckState(Qt.Checked)
+
+    def _clear(self) -> None:
+        for i in range(self.feature_list.count()):
+            self.feature_list.item(i).setCheckState(Qt.Unchecked)
+
+    @staticmethod
+    def _axis_value(box: QComboBox) -> str | None:
+        text = box.currentText().strip()
+        return None if text == "自动" else text
+
+    def _apply_normalization(self, df: pd.DataFrame, method: str) -> pd.DataFrame:
+        if method == "无":
+            return df
+        out = df.copy()
+        numeric_cols = list(out.select_dtypes("number").columns)
+        for col in numeric_cols:
+            values = pd.to_numeric(out[col], errors="coerce")
+            if method == "Min-Max":
+                vmin, vmax = values.min(), values.max()
+                out[col] = 0.0 if pd.isna(vmin) or pd.isna(vmax) or vmax == vmin else (values - vmin) / (vmax - vmin)
+            elif method == "Z-score":
+                mean, std = values.mean(), values.std(ddof=0)
+                out[col] = 0.0 if pd.isna(std) or std == 0 else (values - mean) / std
+        return out
+
+    def _apply(self) -> None:
+        features: list[str] = []
+        for i in range(self.feature_list.count()):
+            item = self.feature_list.item(i)
+            if item.checkState() == Qt.Checked:
+                features.append(item.text())
+
+        label = self.label_box.currentText()
+        if label == "不选择标签列":
+            label = None
+
+        x = self._axis_value(self.x_box)
+        y = self._axis_value(self.y_box)
+        z = self._axis_value(self.z_box)
+
+        cols = list(dict.fromkeys(features + ([label] if label else []) + ([x] if x else []) + ([y] if y else []) + ([z] if z else [])))
+        if not cols:
+            QMessageBox.critical(self, "选择失败", "请至少选择一个特征列、标签列或 X/Y/Z 字段。")
+            return
+
+        df = self.source_df[cols].copy()
+        sample_limit = int(self.sample_spin.value())
+        sample_mode = self.sample_mode_box.currentText()
+        if len(df) > sample_limit:
+            if sample_mode == "随机 N 行":
+                df = df.sample(n=sample_limit, random_state=42).sort_index()
+            else:
+                df = df.head(sample_limit)
+
+        normalization = self.normalization_box.currentText()
+        df = self._apply_normalization(df, normalization)
+
+        self.selected_df = df
+        self.selected_features = features
+        self.selected_label = label
+        self.selected_x = x
+        self.selected_y = y
+        self.selected_z = z
+        self.normalization = normalization
+        self.sample_limit = sample_limit
+        self.sample_mode = sample_mode
+        self.accept()
+
+
+class StyleEditorDialog(QDialog):
+    """图表样式设计器：按当前图表类型展示合理设置。"""
+
+    def __init__(self, spec: ChartSpec, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"图表样式设计器 - {spec.chart_type}")
+        self.setMinimumWidth(500)
+        self.input_spec = spec
+        self.saved_spec: ChartSpec | None = None
+        self._build_ui()
+        self._load_spec(spec)
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        hint_map = {
+            "折线图": "折线图默认只显示连续趋势线，不显示散点节点；可在这里调整线型、线宽、是否显示节点。",
+            "散点图": "散点图主要调整点大小、点类型、配色和背景。",
+            "柱状图": "柱状图会自动按分类聚合数值，避免类别太多导致混乱；可设置显示前 N 个类别和数值标签。",
+            "饼图": "饼图会自动按分类聚合并限制类别数量；可设置环形图、显示前 N 个类别和百分比标签。",
+            "热力图": "热力图会读取所有数值列并计算相关系数；可选择 Spearman、Pearson 或 Kendall。",
+            "三维散点图": "三维散点图需要 X、Y、Z 三个数值列；可调整点大小、点类型和配色。",
+            "曲面图": "曲面图需要 X、Y、Z 三个数值列；适合连续采样或较密集的三维数据。",
+        }
+        hint = QLabel(hint_map.get(self.input_spec.chart_type, "根据当前图表类型调整样式。"))
+        hint.setWordWrap(True)
+        hint.setObjectName("Subtle")
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        self.palette_box = QComboBox(); self.palette_box.addItems(PALETTE_NAMES)
+        self.background_box = QComboBox(); self.background_box.addItems(BACKGROUND_STYLES)
+        self.value_label_check = QCheckBox("显示数值标签 / 注释")
+        form.addRow("配色方案", self.palette_box)
+        form.addRow("背景风格", self.background_box)
+
+        self.line_style_box = None
+        self.line_width_spin = None
+        self.show_line_markers_check = None
+        self.marker_box = None
+        self.point_size_spin = None
+        self.bar_top_n_spin = None
+        self.pie_top_n_spin = None
+        self.donut_check = None
+        self.corr_method_box = None
+        self.heatmap_max_features_spin = None
+        self.heatmap_annotate_check = None
+        self.heatmap_decimals_spin = None
+        self.surface_alpha_spin = None
+
+        chart_type = self.input_spec.chart_type
+
+        if chart_type == "折线图":
+            self.line_style_box = QComboBox(); self.line_style_box.addItems(LINE_STYLES)
+            self.line_width_spin = QDoubleSpinBox(); self.line_width_spin.setRange(0.5, 8.0); self.line_width_spin.setSingleStep(0.2)
+            self.show_line_markers_check = QCheckBox("显示节点标记")
+            form.addRow("线类型", self.line_style_box)
+            form.addRow("线宽", self.line_width_spin)
+            form.addRow("", self.show_line_markers_check)
+            form.addRow("", self.value_label_check)
+
+        elif chart_type == "散点图":
+            self.marker_box = QComboBox(); self.marker_box.addItems(MARKER_STYLES)
+            self.point_size_spin = QSpinBox(); self.point_size_spin.setRange(10, 300); self.point_size_spin.setSingleStep(5)
+            form.addRow("点类型", self.marker_box)
+            form.addRow("点大小", self.point_size_spin)
+
+        elif chart_type == "柱状图":
+            self.bar_top_n_spin = QSpinBox(); self.bar_top_n_spin.setRange(3, 50)
+            form.addRow("最多显示类别数", self.bar_top_n_spin)
+            form.addRow("", self.value_label_check)
+
+        elif chart_type == "饼图":
+            self.pie_top_n_spin = QSpinBox(); self.pie_top_n_spin.setRange(3, 20)
+            self.donut_check = QCheckBox("环形饼图")
+            form.addRow("最多显示类别数", self.pie_top_n_spin)
+            form.addRow("", self.donut_check)
+            form.addRow("", self.value_label_check)
+
+        elif chart_type == "热力图":
+            self.corr_method_box = QComboBox(); self.corr_method_box.addItems(CORRELATION_METHODS)
+            self.heatmap_max_features_spin = QSpinBox(); self.heatmap_max_features_spin.setRange(2, 120)
+            self.heatmap_decimals_spin = QSpinBox(); self.heatmap_decimals_spin.setRange(2, 6)
+            self.heatmap_annotate_check = QCheckBox("显示相关系数数值")
+            form.addRow("相关系数", self.corr_method_box)
+            form.addRow("最多显示特征数", self.heatmap_max_features_spin)
+            form.addRow("小数位数", self.heatmap_decimals_spin)
+            form.addRow("", self.heatmap_annotate_check)
+
+        elif chart_type == "三维散点图":
+            self.marker_box = QComboBox(); self.marker_box.addItems(MARKER_STYLES)
+            self.point_size_spin = QSpinBox(); self.point_size_spin.setRange(10, 500); self.point_size_spin.setSingleStep(5)
+            form.addRow("点类型", self.marker_box)
+            form.addRow("点大小", self.point_size_spin)
+
+        elif chart_type == "曲面图":
+            self.point_size_spin = QSpinBox(); self.point_size_spin.setRange(6, 200); self.point_size_spin.setSingleStep(4)
+            self.surface_alpha_spin = QDoubleSpinBox(); self.surface_alpha_spin.setRange(0.1, 1.0); self.surface_alpha_spin.setSingleStep(0.05)
+            form.addRow("辅助点大小", self.point_size_spin)
+            form.addRow("曲面透明度", self.surface_alpha_spin)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _load_spec(self, spec: ChartSpec) -> None:
+        self.palette_box.setCurrentText(spec.palette)
+        self.background_box.setCurrentText(spec.background_style)
+        self.value_label_check.setChecked(spec.show_value_labels)
+
+        if self.line_style_box:
+            self.line_style_box.setCurrentText(spec.line_style)
+        if self.line_width_spin:
+            self.line_width_spin.setValue(spec.line_width)
+        if self.show_line_markers_check:
+            self.show_line_markers_check.setChecked(spec.show_line_markers)
+        if self.marker_box:
+            self.marker_box.setCurrentText(spec.marker_style)
+        if self.point_size_spin:
+            self.point_size_spin.setValue(spec.point_size)
+        if self.bar_top_n_spin:
+            self.bar_top_n_spin.setValue(spec.bar_top_n)
+        if self.pie_top_n_spin:
+            self.pie_top_n_spin.setValue(spec.pie_top_n)
+        if self.donut_check:
+            self.donut_check.setChecked(spec.donut)
+        if self.corr_method_box:
+            self.corr_method_box.setCurrentText(spec.corr_method)
+        if self.heatmap_max_features_spin:
+            self.heatmap_max_features_spin.setValue(spec.heatmap_max_features)
+        if self.heatmap_annotate_check:
+            self.heatmap_annotate_check.setChecked(spec.heatmap_annotate)
+        if self.heatmap_decimals_spin:
+            self.heatmap_decimals_spin.setValue(spec.heatmap_decimals)
+        if self.surface_alpha_spin:
+            self.surface_alpha_spin.setValue(spec.surface_alpha)
+
+    def _save(self) -> None:
+        self.saved_spec = replace(
+            self.input_spec,
+            palette=self.palette_box.currentText(),
+            background_style=self.background_box.currentText(),
+            show_value_labels=self.value_label_check.isChecked(),
+            line_style=self.line_style_box.currentText() if self.line_style_box else self.input_spec.line_style,
+            line_width=float(self.line_width_spin.value()) if self.line_width_spin else self.input_spec.line_width,
+            show_line_markers=self.show_line_markers_check.isChecked() if self.show_line_markers_check else self.input_spec.show_line_markers,
+            marker_style=self.marker_box.currentText() if self.marker_box else self.input_spec.marker_style,
+            point_size=int(self.point_size_spin.value()) if self.point_size_spin else self.input_spec.point_size,
+            bar_top_n=int(self.bar_top_n_spin.value()) if self.bar_top_n_spin else self.input_spec.bar_top_n,
+            pie_top_n=int(self.pie_top_n_spin.value()) if self.pie_top_n_spin else self.input_spec.pie_top_n,
+            donut=self.donut_check.isChecked() if self.donut_check else self.input_spec.donut,
+            corr_method=self.corr_method_box.currentText() if self.corr_method_box else self.input_spec.corr_method,
+            heatmap_max_features=int(self.heatmap_max_features_spin.value()) if self.heatmap_max_features_spin else self.input_spec.heatmap_max_features,
+            heatmap_annotate=self.heatmap_annotate_check.isChecked() if self.heatmap_annotate_check else self.input_spec.heatmap_annotate,
+            heatmap_decimals=int(self.heatmap_decimals_spin.value()) if self.heatmap_decimals_spin else self.input_spec.heatmap_decimals,
+            surface_alpha=float(self.surface_alpha_spin.value()) if self.surface_alpha_spin else self.input_spec.surface_alpha,
+        )
         self.accept()

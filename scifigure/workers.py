@@ -10,7 +10,8 @@ from .llm import AIResult, LLMChartAssistant
 
 
 class AIPlotWorker(QThread):
-    finished_ok = pyqtSignal(object, object, object)  # AIResult, Figure, ChartSpec
+    # AIResult, Figure|None, ChartSpec|None
+    finished_ok = pyqtSignal(object, object, object)
     failed = pyqtSignal(str)
 
     def __init__(self, df: pd.DataFrame, request: str, language: str, assistant: LLMChartAssistant, engine: ChartEngine) -> None:
@@ -23,7 +24,10 @@ class AIPlotWorker(QThread):
 
     def run(self) -> None:
         try:
-            result: AIResult = self.assistant.create_spec(self.df, self.request, self.language)
+            result: AIResult = self.assistant.handle_request(self.df, self.request, self.language)
+            if result.kind == "answer" or result.spec is None:
+                self.finished_ok.emit(result, None, None)
+                return
             fig = self.engine.render(self.df, result.spec)
             self.finished_ok.emit(result, fig, result.spec)
         except Exception:
